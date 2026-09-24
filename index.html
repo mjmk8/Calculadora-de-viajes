@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="description" content="Calculadora de precio por kilómetro para repartidores.">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<title>Calculadora KM Delivery</title>
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--border:#334155;--text:#f1f5f9;--muted:#94a3b8;--accent:#22c55e;--accent2:#38bdf8;--danger:#f87171}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{padding:16px;max-width:640px;margin:0 auto}
+h1{font-size:1.3rem;margin:8px 0 4px}.sub{color:var(--muted);font-size:.85rem;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px}
+.card h2{font-size:.95rem;margin:0 0 10px;display:flex;align-items:center;gap:6px}
+label{display:block;font-size:.8rem;color:var(--muted);margin:8px 0 4px}
+input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:1rem}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:6px}.row input{flex:1}
+button{cursor:pointer}.rm{background:var(--danger);color:#fff;border:none;border-radius:6px;width:32px;height:38px;font-size:1rem}
+.add{background:transparent;border:1px dashed var(--border);color:var(--accent2);border-radius:8px;padding:8px;width:100%;margin-top:4px;font-size:.85rem}
+.locbtn{background:var(--accent2);color:#04263a;border:none;border-radius:8px;padding:10px;width:100%;font-weight:600}
+.locinfo{margin-top:8px;font-size:.8rem;color:var(--muted);overflow-wrap:anywhere}
+.calc{background:var(--accent);color:#052e13;border:none;border-radius:10px;padding:14px;width:100%;font-weight:700;font-size:1rem;margin:6px 0 16px}
+.calc:disabled{opacity:.5}#result{display:none}.kmrow{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:.9rem}
+.kmrow:last-child{border-bottom:none}.price{font-size:1.6rem;font-weight:800;color:var(--accent);text-align:center;margin:10px 0}
+.note{font-size:.75rem;color:var(--muted);text-align:center}.err{color:var(--danger);font-size:.85rem;margin-top:8px}
+.small{font-size:.75rem;color:var(--muted);line-height:1.4}
+</style>
+</head>
+<body>
+<h1>🛵 Calculadora de precio por km</h1>
+<div class="sub">Tomá tu ubicación, cargá local y entrega, y calculá el precio para el cliente.</div>
+
+<div class="card">
+<h2>📍 Mi ubicación</h2>
+<button class="locbtn" id="locBtn">Usar mi ubicación actual</button>
+<div class="locinfo" id="locInfo">Todavía no la tomaste.</div>
+</div>
+
+<div class="card"><h2>🏪 Local(es) de retiro</h2><div id="pickups"></div>
+<button class="add" id="addPickup">+ Agregar otro local</button></div>
+
+<div class="card"><h2>📦 Entrega(s) del pedido</h2><div id="drops"></div>
+<button class="add" id="addDrop">+ Agregar otra entrega</button></div>
+
+<div class="card"><h2>💲 Tarifas</h2>
+<label>Precio por km ($)</label><input type="number" id="pricePerKm" placeholder="ej: 350" min="0" step="1">
+<label>Plus mínimo (si el local está a ≤2 km de vos)</label><input type="number" id="plusMinimo" value="225" min="0" step="1">
+<p class="small">La ubicación funciona cuando abrís esta página desde GitHub Pages mediante HTTPS.</p>
+</div>
+
+<button class="calc" id="calcBtn">Calcular</button>
+<div class="err" id="err"></div>
+
+<div class="card" id="result"><h2>📊 Resultado</h2>
+<div class="kmrow"><span>Km: vos → local</span><span id="kmA"></span></div>
+<div class="kmrow"><span>Km: local → cliente</span><span id="kmB"></span></div>
+<div class="kmrow"><span>Km totales</span><span id="kmT"></span></div>
+<div class="price" id="precioFinal"></div><div class="note" id="detalle"></div>
+</div>
+
+<script>
+let myLoc=null;
+
+const $=id=>document.getElementById(id);
+function addAddr(container){
+  const div=document.createElement('div'); div.className='row';
+  const input=document.createElement('input');
+  input.type='text'; input.placeholder='Calle y número, ej: San Martín 2950'; input.className='addr';
+  const btn=document.createElement('button'); btn.className='rm'; btn.textContent='✕';
+  btn.onclick=()=>div.remove(); div.append(input,btn); $(container).appendChild(div);
+}
+addAddr('pickups'); addAddr('drops');
+$('addPickup').onclick=()=>addAddr('pickups'); $('addDrop').onclick=()=>addAddr('drops');
+
+$('locBtn').onclick=()=>{
+ const info=$('locInfo');
+ if(!window.isSecureContext){info.textContent='Abrí la página desde https://... (GitHub Pages). No funciona bien con file://';return;}
+ if(!navigator.geolocation){info.textContent='Tu navegador no soporta geolocalización.';return;}
+ info.textContent='Buscando ubicación...';
+ navigator.geolocation.getCurrentPosition(pos=>{
+   myLoc=[pos.coords.longitude,pos.coords.latitude];
+   info.textContent=`Ubicación tomada ✓ (${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)})`;
+ },err=>{
+   const msgs={1:'Permiso denegado. Activá la ubicación y permití el acceso al navegador.',2:'No se pudo determinar tu ubicación.',3:'La búsqueda tardó demasiado.'};
+   info.textContent=msgs[err.code]||('Error de ubicación: '+err.message);
+ },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+};
+
+async function geocode(address){
+ const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ar&addressdetails=1&q='+encodeURIComponent(address+', Santa Fe, Argentina');
+ const res=await fetch(url,{headers:{'Accept':'application/json'}});
+ if(!res.ok)throw new Error('No se pudo consultar el buscador de direcciones.');
+ const data=await res.json();
+ if(!data.length)throw new Error('No encontré la dirección: '+address);
+ return [Number(data[0].lon),Number(data[0].lat)];
+}
+async function route(points){
+ const coords=points.map(p=>p.join(',')).join(';');
+ const url='https://router.project-osrm.org/route/v1/driving/'+coords+'?overview=false';
+ const res=await fetch(url);
+ if(!res.ok)throw new Error('No se pudo calcular la ruta.');
+ const data=await res.json();
+ if(data.code!=='Ok'||!data.routes?.length)throw new Error('No se encontró una ruta.');
+ return data.routes[0].distance/1000;
+}
+async function calcular(){
+ const err=$('err');err.textContent='';$('result').style.display='none';
+ const pickups=[...document.querySelectorAll('#pickups .addr')].map(i=>i.value.trim()).filter(Boolean);
+ const drops=[...document.querySelectorAll('#drops .addr')].map(i=>i.value.trim()).filter(Boolean);
+ const price=Number($('pricePerKm').value),plus=Number($('plusMinimo').value)||0;
+ if(!myLoc){err.textContent='Primero tocá “Usar mi ubicación actual”.';return;}
+ if(!pickups.length){err.textContent='Cargá al menos un local.';return;}
+ if(!drops.length){err.textContent='Cargá al menos una entrega.';return;}
+ if(!(price>0)){err.textContent='Cargá un precio por km válido.';return;}
+ const btn=$('calcBtn');btn.disabled=true;btn.textContent='Calculando...';
+ try{
+   const pc=[];for(const a of pickups)pc.push(await geocode(a));
+   const dc=[];for(const a of drops)dc.push(await geocode(a));
+   const kmA=await route([myLoc,...pc]);
+   const kmB=await route([pc[pc.length-1],...dc]);
+   const kmT=kmA+kmB;
+   let total,detail;
+   if(kmA<=2){total=kmB*price+plus;detail=`Local a ${kmA.toFixed(1)} km: se cobra local → cliente (${kmB.toFixed(1)} km × $${price}) + plus de $${plus}.`;}
+   else{total=kmT*price;detail=`Local a ${kmA.toFixed(1)} km: se cobran todos los km (${kmT.toFixed(1)} km × $${price}).`;}
+   $('kmA').textContent=kmA.toFixed(2)+' km';$('kmB').textContent=kmB.toFixed(2)+' km';$('kmT').textContent=kmT.toFixed(2)+' km';
+   $('precioFinal').textContent='$ '+Math.round(total).toLocaleString('es-AR');$('detalle').textContent=detail;$('result').style.display='block';
+ }catch(e){err.textContent=e.message||'Ocurrió un error.';}
+ finally{btn.disabled=false;btn.textContent='Calcular';}
+}
+$('calcBtn').onclick=calcular;
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./service-worker.js'));
+</script>
+</body></html>
