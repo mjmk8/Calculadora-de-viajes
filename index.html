@@ -18,7 +18,11 @@ h1{font-size:1.3rem;margin:8px 0 4px}.sub{color:var(--muted);font-size:.85rem;ma
 .card h2{font-size:.95rem;margin:0 0 10px;display:flex;align-items:center;gap:6px}
 label{display:block;font-size:.8rem;color:var(--muted);margin:8px 0 4px}
 input{width:100%;padding:10px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--text);font-size:1rem}
-.row{display:flex;gap:8px;align-items:center;margin-bottom:6px}.row input{flex:1}
+input.ok{border-color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:6px;position:relative}.row input{flex:1}
+.sug{position:absolute;top:100%;left:0;right:40px;z-index:20;margin:2px 0 0;padding:0;list-style:none;background:#0b1220;border:1px solid var(--border);border-radius:8px;max-height:240px;overflow-y:auto;box-shadow:0 8px 20px rgba(0,0,0,.5)}
+.sug li{padding:10px;font-size:.9rem;border-bottom:1px solid var(--border);cursor:pointer}
+.sug li:last-child{border-bottom:none}.sug li:hover,.sug li:active{background:var(--border)}
 button{cursor:pointer}.rm{background:var(--danger);color:#fff;border:none;border-radius:6px;width:32px;height:38px;font-size:1rem}
 .add{background:transparent;border:1px dashed var(--border);color:var(--accent2);border-radius:8px;padding:8px;width:100%;margin-top:4px;font-size:.85rem}
 .locbtn{background:var(--accent2);color:#04263a;border:none;border-radius:8px;padding:10px;width:100%;font-weight:600}
@@ -27,6 +31,7 @@ button{cursor:pointer}.rm{background:var(--danger);color:#fff;border:none;border
 .calc:disabled{opacity:.5}#result{display:none}.kmrow{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:.9rem}
 .kmrow:last-child{border-bottom:none}.price{font-size:1.6rem;font-weight:800;color:var(--accent);text-align:center;margin:10px 0}
 .note{font-size:.75rem;color:var(--muted);text-align:center}.err{color:var(--danger);font-size:.85rem;margin-top:8px}
+.warn{color:#fbbf24;font-size:.75rem;text-align:center;margin-top:8px}
 .small{font-size:.75rem;color:var(--muted);line-height:1.4}
 </style>
 </head>
@@ -49,7 +54,7 @@ button{cursor:pointer}.rm{background:var(--danger);color:#fff;border:none;border
 <div class="card"><h2>💲 Tarifas</h2>
 <label>Precio por km ($)</label><input type="number" id="pricePerKm" placeholder="ej: 350" min="0" step="1">
 <label>Plus mínimo (si el local está a ≤2 km de vos)</label><input type="number" id="plusMinimo" value="225" min="0" step="1">
-<p class="small">La ubicación funciona cuando abrís esta página desde GitHub Pages mediante HTTPS.</p>
+<p class="small">Escribí la calle y elegí una opción de la lista (el borde se pone verde). Así el cálculo usa el punto exacto. La ubicación funciona cuando abrís esta página desde GitHub Pages mediante HTTPS.</p>
 </div>
 
 <button class="calc" id="calcBtn">Calcular</button>
@@ -60,22 +65,69 @@ button{cursor:pointer}.rm{background:var(--danger);color:#fff;border:none;border
 <div class="kmrow"><span>Km: local → cliente</span><span id="kmB"></span></div>
 <div class="kmrow"><span>Km totales</span><span id="kmT"></span></div>
 <div class="price" id="precioFinal"></div><div class="note" id="detalle"></div>
+<div class="warn" id="aviso"></div>
 </div>
 
 <script>
-let myLoc=null;
-
+let myLoc=null;               // [lon, lat]
+const SF=[-60.7000,-31.6333]; // centro de Santa Fe, para priorizar resultados cercanos
 const $=id=>document.getElementById(id);
-function addAddr(container){
-  const div=document.createElement('div'); div.className='row';
-  const input=document.createElement('input');
-  input.type='text'; input.placeholder='Calle y número, ej: San Martín 2950'; input.className='addr';
-  const btn=document.createElement('button'); btn.className='rm'; btn.textContent='✕';
-  btn.onclick=()=>div.remove(); div.append(input,btn); $(container).appendChild(div);
-}
-addAddr('pickups'); addAddr('drops');
-$('addPickup').onclick=()=>addAddr('pickups'); $('addDrop').onclick=()=>addAddr('drops');
 
+/* ---------- Autocompletado (Photon / OpenStreetMap) ---------- */
+function labelOf(p){
+  const main=p.street?`${p.street}${p.housenumber?' '+p.housenumber:''}`:(p.name||'');
+  const extra=[p.street&&p.name&&p.name!==p.street?p.name:null,p.district,p.city,p.state].filter(Boolean);
+  return main+(extra.length?', '+extra.join(', '):'');
+}
+async function suggest(q,signal){
+  const base=myLoc||SF;
+  const url='https://photon.komoot.io/api/?limit=10&lat='+base[1]+'&lon='+base[0]+'&q='+encodeURIComponent(q);
+  const res=await fetch(url,{signal});
+  if(!res.ok)throw new Error('Autocompletado no disponible');
+  const data=await res.json();
+  return (data.features||[])
+    .filter(f=>f.properties&&f.properties.countrycode==='AR')
+    .slice(0,6)
+    .map(f=>({label:labelOf(f.properties),lon:f.geometry.coordinates[0],lat:f.geometry.coordinates[1]}));
+}
+function addAddr(container){
+  const div=document.createElement('div');div.className='row';
+  const input=document.createElement('input');
+  input.type='text';input.placeholder='Calle y número, ej: San Martín 2950';input.className='addr';input.autocomplete='off';
+  const list=document.createElement('ul');list.className='sug';list.hidden=true;
+  const btn=document.createElement('button');btn.className='rm';btn.textContent='✕';btn.onclick=()=>div.remove();
+  let timer,ctrl;
+  input.addEventListener('input',()=>{
+    delete input.dataset.lon;delete input.dataset.lat;input.classList.remove('ok');
+    clearTimeout(timer);if(ctrl)ctrl.abort();
+    const q=input.value.trim();
+    if(q.length<3){list.hidden=true;return;}
+    timer=setTimeout(async()=>{
+      ctrl=new AbortController();
+      try{
+        const items=await suggest(q,ctrl.signal);
+        list.innerHTML='';
+        if(!items.length){list.hidden=true;return;}
+        items.forEach(it=>{
+          const li=document.createElement('li');li.textContent=it.label;
+          li.addEventListener('pointerdown',ev=>{
+            ev.preventDefault();
+            input.value=it.label;input.dataset.lon=it.lon;input.dataset.lat=it.lat;
+            input.classList.add('ok');list.hidden=true;
+          });
+          list.appendChild(li);
+        });
+        list.hidden=false;
+      }catch(e){if(e.name!=='AbortError')list.hidden=true;}
+    },350);
+  });
+  input.addEventListener('blur',()=>setTimeout(()=>{list.hidden=true;},150));
+  div.append(input,btn,list);$(container).appendChild(div);
+}
+addAddr('pickups');addAddr('drops');
+$('addPickup').onclick=()=>addAddr('pickups');$('addDrop').onclick=()=>addAddr('drops');
+
+/* ---------- Ubicación ---------- */
 $('locBtn').onclick=()=>{
  const info=$('locInfo');
  if(!window.isSecureContext){info.textContent='Abrí la página desde https://... (GitHub Pages). No funciona bien con file://';return;}
@@ -90,36 +142,46 @@ $('locBtn').onclick=()=>{
  },{enableHighAccuracy:true,timeout:15000,maximumAge:0});
 };
 
+/* ---------- Geocodificación de respaldo (si no eligió de la lista) ---------- */
 async function geocode(address){
- const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ar&addressdetails=1&q='+encodeURIComponent(address+', Santa Fe, Argentina');
+ const url='https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ar&q='+encodeURIComponent(address+', Santa Fe, Argentina');
  const res=await fetch(url,{headers:{'Accept':'application/json'}});
  if(!res.ok)throw new Error('No se pudo consultar el buscador de direcciones.');
  const data=await res.json();
  if(!data.length)throw new Error('No encontré la dirección: '+address);
  return [Number(data[0].lon),Number(data[0].lat)];
 }
+async function resolve(input,state){
+ if(input.dataset.lon&&input.dataset.lat)return [Number(input.dataset.lon),Number(input.dataset.lat)];
+ state.sinElegir=true;
+ return geocode(input.value.trim());
+}
+
+/* ---------- Ruta real por calle (OSRM) ---------- */
 async function route(points){
  const coords=points.map(p=>p.join(',')).join(';');
- const url='https://router.project-osrm.org/route/v1/driving/'+coords+'?overview=false';
- const res=await fetch(url);
+ const url='https://router.project-osrm.org/route/v1/driving/'+coords+'?overview=false&alternatives=false&steps=false';
+ const res=await fetch(url,{cache:'no-store'});
  if(!res.ok)throw new Error('No se pudo calcular la ruta.');
  const data=await res.json();
  if(data.code!=='Ok'||!data.routes?.length)throw new Error('No se encontró una ruta.');
  return data.routes[0].distance/1000;
 }
+
 async function calcular(){
  const err=$('err');err.textContent='';$('result').style.display='none';
- const pickups=[...document.querySelectorAll('#pickups .addr')].map(i=>i.value.trim()).filter(Boolean);
- const drops=[...document.querySelectorAll('#drops .addr')].map(i=>i.value.trim()).filter(Boolean);
+ const pickups=[...document.querySelectorAll('#pickups .addr')].filter(i=>i.value.trim());
+ const drops=[...document.querySelectorAll('#drops .addr')].filter(i=>i.value.trim());
  const price=Number($('pricePerKm').value),plus=Number($('plusMinimo').value)||0;
  if(!myLoc){err.textContent='Primero tocá “Usar mi ubicación actual”.';return;}
  if(!pickups.length){err.textContent='Cargá al menos un local.';return;}
  if(!drops.length){err.textContent='Cargá al menos una entrega.';return;}
  if(!(price>0)){err.textContent='Cargá un precio por km válido.';return;}
  const btn=$('calcBtn');btn.disabled=true;btn.textContent='Calculando...';
+ const state={sinElegir:false};
  try{
-   const pc=[];for(const a of pickups)pc.push(await geocode(a));
-   const dc=[];for(const a of drops)dc.push(await geocode(a));
+   const pc=[];for(const i of pickups)pc.push(await resolve(i,state));
+   const dc=[];for(const i of drops)dc.push(await resolve(i,state));
    const kmA=await route([myLoc,...pc]);
    const kmB=await route([pc[pc.length-1],...dc]);
    const kmT=kmA+kmB;
@@ -127,7 +189,9 @@ async function calcular(){
    if(kmA<=2){total=kmB*price+plus;detail=`Local a ${kmA.toFixed(1)} km: se cobra local → cliente (${kmB.toFixed(1)} km × $${price}) + plus de $${plus}.`;}
    else{total=kmT*price;detail=`Local a ${kmA.toFixed(1)} km: se cobran todos los km (${kmT.toFixed(1)} km × $${price}).`;}
    $('kmA').textContent=kmA.toFixed(2)+' km';$('kmB').textContent=kmB.toFixed(2)+' km';$('kmT').textContent=kmT.toFixed(2)+' km';
-   $('precioFinal').textContent='$ '+Math.round(total).toLocaleString('es-AR');$('detalle').textContent=detail;$('result').style.display='block';
+   $('precioFinal').textContent='$ '+Math.round(total).toLocaleString('es-AR');$('detalle').textContent=detail;
+   $('aviso').textContent=state.sinElegir?'⚠ Alguna dirección no se eligió de la lista: el punto puede ser aproximado.':'';
+   $('result').style.display='block';
  }catch(e){err.textContent=e.message||'Ocurrió un error.';}
  finally{btn.disabled=false;btn.textContent='Calcular';}
 }
